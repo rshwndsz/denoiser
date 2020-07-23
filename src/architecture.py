@@ -8,7 +8,9 @@ import torch.utils.data as td
 import torchvision as tv
 import pytorch_lightning as pl
 
-import constants as C
+from src.logger import logger
+import src.constants as C
+from src.data import NoisyBSDS, CIFAR10
 
 
 class BNReLUConv(nn.Sequential):
@@ -28,7 +30,7 @@ class ResidualBlock(nn.Module):
         super(ResidualBlock, self).__init__()
         self.relu_conv1 = BNReLUConv(channels, channels, k, s, p)
         self.relu_conv2 = BNReLUConv(channels, channels, k, s, p)
-        
+
     def forward(self, x):
         residual = x
         out      = self.relu_conv1(x)
@@ -41,17 +43,17 @@ class MemoryBlock(nn.Module):
     def __init__(self, channels, num_resblock, num_memblock):
         super(MemoryBlock, self).__init__()
         self.recursive_unit = nn.ModuleList(
-            [ResidualBlock(channels) for i in range(num_resblock)]
+            [ResidualBlock(channels) for _ in range(num_resblock)]
         )
-        self.gate_unit = BNReLUConv((num_resblock+num_memblock) * channels, channels, 1, 1, 0)
+        self.gate_unit = BNReLUConv((num_resblock+num_memblock) * channels,
+                                    channels, 1, 1, 0)
 
     def forward(self, x, long_term_mem):
         short_term_mem = []
-        residual       = x
         for layer in self.recursive_unit:
             x = layer(x)
             short_term_mem.append(x)
-        
+
         gate_out = self.gate_unit(torch.cat(long_term_mem + short_term_mem, 1))
         long_term_mem.append(gate_out)
         return gate_out
@@ -78,7 +80,8 @@ class MemNet(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=C.INIT_LR)
-        
+
+    # noinspection PyMethodMayBeStatic
     def loss_function(self, recon, clean):
         return F.mse_loss(recon, clean)
 
@@ -100,20 +103,27 @@ class MemNet(pl.LightningModule):
         if os.path.isdir("cifar-10"):
             logger.debug("cifar-10 already exists.")
             self.test_dataset = CIFAR10(root_dir="cifar-10", train=False,
-                                        image_size=C.IMG_SIZE, sigma=C.SIGMA, download=False)
+                                        image_size=C.IMG_SIZE, sigma=C.SIGMA,
+                                        download=False)
         else:
             # Download
+            # noinspection PyAttributeOutsideInit
             self.test_dataset = CIFAR10(root_dir="cifar-10", train=False,
-                                        image_size=C.IMG_SIZE, sigma=C.SIGMA, download=True)
-        
+                                        image_size=C.IMG_SIZE, sigma=C.SIGMA,
+                                        download=True)
+
+    # noinspection PyUnusedLocal
     def setup(self, stage):
         # Loading training + validation dataset
-        trainval_dataset   = NoisyBSDS(root_dir=BSDS_ROOT, mode="train", image_size=C.IMG_SIZE, sigma=C.SIGMA)
+        trainval_dataset   = NoisyBSDS(root_dir=C.BSDS_ROOT, mode="train",
+                                       image_size=C.IMG_SIZE, sigma=C.SIGMA)
         # Randomly split into 70-30 (Train-Val)
-        self.train_dataset, self.val_dataset = td.random_split(trainval_dataset, 
-                                                               [int(0.7*len(trainval_dataset)), 
-                                                                int(0.3*len(trainval_dataset))])
-        
+        total_len          = len(trainval_dataset)
+        # noinspection PyAttributeOutsideInit
+        self.train_dataset, self.val_dataset = td.random_split(trainval_dataset,
+                                                               [int(0.7*total_len),
+                                                                int(0.3*total_len)])
+
     def train_dataloader(self):
         return td.DataLoader(
             self.train_dataset, batch_size=C.BATCH_SIZE,
@@ -121,8 +131,10 @@ class MemNet(pl.LightningModule):
             shuffle=True,
         )
 
+    # noinspection PyUnusedLocal
     def training_step(self, batch, batch_idx):
         noisy, clean = batch
+        # noinspection PyCallingNonCallable
         recon        = self(noisy)
         loss         = self.loss_function(recon, clean)
         log          = {'train_loss': loss}
@@ -135,8 +147,10 @@ class MemNet(pl.LightningModule):
             shuffle=False,
         )
 
+    # noinspection PyUnusedLocal
     def validation_step(self, batch, batch_idx):
         noisy, clean = batch
+        # noinspection PyCallingNonCallable
         recon        = self(noisy)
         val_loss     = self.loss_function(recon, clean)
         return {'val_loss': val_loss, 'recon': recon, 'noisy': noisy}
@@ -150,38 +164,48 @@ class MemNet(pl.LightningModule):
 
         # Create a grid image for the batch
         n     = min(noisy.size(0), 8)
-        cat   = torch.cat([noisy.view(noisy.size(0), C.IN_CHANNELS, *C.IMG_SIZE)[:n], 
+        cat   = torch.cat([noisy.view(noisy.size(0), C.IN_CHANNELS, *C.IMG_SIZE)[:n],
                            recon.view(recon.size(0), C.IN_CHANNELS, *C.IMG_SIZE)[:n]])
-        grid  = tv.utils.make_grid(cat.cpu(), nrow=n, padding=2, pad_value=0, 
+        grid  = tv.utils.make_grid(cat.cpu(), nrow=n, padding=2, pad_value=0,
                                    normalize=False, scale_each=False, range=None)
         ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).to('cpu', torch.uint8).numpy()
         # Log the grid image to Tensorboard
-        self.logger.experiment.add_image(f'val_results_{self.current_epoch}', ndarr, dataformats='CHW')
+        self.logger.experiment.add_image(f'val_results_{self.current_epoch}',
+                                         ndarr, dataformats='CHW')
         # Save a copy locally
-        tv.utils.save_image(cat, nrow=n, fp=f"./val_results_{self.current_epoch}.jpg")
+        tv.utils.save_image(cat, filename=f"./val_results_{self.current_epoch}.jpg", nrow=n)
 
         # Log the average validation loss to tensorboard
         log = {'avg_val_loss': avg_val_loss}
         # Return `avg_val_loss` as `val_loss` for EarlyCheckpoint callback
-        return { 'log': log , 'val_loss': avg_val_loss }
+        return {'log': log, 'val_loss': avg_val_loss}
 
     def test_dataloader(self):
         return td.DataLoader(
-            self.test_dataset, batch_size=int(C.IMG_SIZE[0] / 32) * 4, 
+            self.test_dataset, batch_size=int(C.IMG_SIZE[0] / 32) * 4,
             num_workers=C.NUM_WORKERS, pin_memory=C.USE_GPU,
             shuffle=False,
         )
 
     def test_step(self, batch, batch_idx):
         n     = int(C.IMG_SIZE[0] / 32)
-        clean = tv.utils.make_grid(batch, nrow=n, padding=0, normalize=False, 
+        clean = tv.utils.make_grid(batch, nrow=n, padding=0, normalize=False,
                                    range=None, scale_each=False, pad_value=0)
         clean = clean.unsqueeze(dim=0)
-        noisy = (clean + torch.tensor(2, dtype=clean.dtype) / 
-                 torch.tensor(255, dtype=clean.dtype) * torch.tensor(C.SIGMA, dtype=clean.dtype) * torch.randn_like(clean))
+        noisy = (clean + torch.tensor(2, dtype=clean.dtype) /
+                 (torch.tensor(255, dtype=clean.dtype) *
+                  torch.tensor(C.SIGMA, dtype=clean.dtype) *
+                  torch.randn_like(clean))
+                 )
+        # noinspection PyCallingNonCallable
         recon = self(noisy)
 
-        return {'recon': recon, 'noisy': noisy, 'clean': clean, 'id': f'{self.current_epoch}--{batch_idx}'}
+        return {
+            'recon': recon,
+            'noisy': noisy,
+            'clean': clean,
+            'id': f'{self.current_epoch}--{batch_idx}'
+        }
 
     def test_step_end(self, outputs):
         n     = 3
@@ -189,18 +213,18 @@ class MemNet(pl.LightningModule):
         noisy = outputs['noisy']
         clean = outputs['clean']
 
-        cat   = torch.cat([noisy.view(noisy.size(0), C.IN_CHANNELS, *C.IMG_SIZE)[:n], 
+        cat   = torch.cat([noisy.view(noisy.size(0), C.IN_CHANNELS, *C.IMG_SIZE)[:n],
                            recon.view(recon.size(0), C.IN_CHANNELS, *C.IMG_SIZE)[:n],
                            clean.view(clean.size(0), C.IN_CHANNELS, *C.IMG_SIZE)[:n]])
-        grid  = tv.utils.make_grid(cat.cpu(), nrow=3, padding=4, pad_value=0, 
+        grid  = tv.utils.make_grid(cat.cpu(), nrow=3, padding=4, pad_value=0,
                                    normalize=False, scale_each=False, range=None)
         ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).to('cpu', torch.uint8).numpy()
-        self.logger.experiment.add_image(f"test_results_{outputs['id']}", ndarr, dataformats='CHW')
-                
+        self.logger.experiment.add_image(f"test_results_{outputs['id']}",
+                                         ndarr, dataformats='CHW')
+
         tv.utils.save_image(cat, nrow=3, padding=4, pad_value=0,
                             normalize=False, scale_each=False, range=None,
-                            fp=f"./test_result_{outputs['id']}.jpg")
+                            filename=f"./test_result_{outputs['id']}.jpg")
 
     def test_epoch_end(self, outputs):
         pass
-

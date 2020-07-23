@@ -23,4 +23,3 @@ PROFILE       = False
 MIN_EPOCHS    = 12
 MAX_EPOCHS    = 50
 VAL_FREQ      = 3
-

@@ -1,8 +1,10 @@
+import torch
 import torch.utils.data as td
 import torchvision as tv
 import os
 from PIL import Image
-import constants as C
+
+import src.constants as C
 
 
 class NoisyBSDS(td.Dataset):
@@ -21,7 +23,7 @@ class NoisyBSDS(td.Dataset):
         # Get image path
         img_path  = os.path.join(self.images_dir, self.files[idx])
         # Load image
-        clean     = Image.open(img_path).convert('RGB')   
+        clean     = Image.open(img_path).convert('RGB')
         # Define augmentations
         # See: https://pytorch.org/docs/stable/torchvision/transforms.html
         if self.mode != "test":
@@ -42,7 +44,7 @@ class NoisyBSDS(td.Dataset):
         # Augment image
         clean = transform(clean)
         # Return (noisy, clean) pair for `training` and `validation`
-        f self.mode != "test":
+        if self.mode != "test":
             noisy = clean + 2 / 255 * self.sigma * torch.randn(clean.shape)
             return noisy, clean
         # Return only clean image for `testing`
@@ -50,16 +52,20 @@ class NoisyBSDS(td.Dataset):
 
 
 class CIFAR10(td.Dataset):
-    def __init__(self, root_dir, train=False, image_size=C.IMG_SIZE, sigma=C.SIGMA, download=False):
+    def __init__(self, root_dir, train=False, image_size=C.IMG_SIZE,
+                 sigma=C.SIGMA, download=False):
         super(CIFAR10, self).__init__()
         self.tf         = tv.transforms.Compose([
                           tv.transforms.ToTensor(),
                           tv.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
-        self.ds         = tv.datasets.CIFAR10(root=root_dir, train=False, transform=self.tf, 
-                                              download=download)
+        self.root_dir   = root_dir
+        self.train      = train
         self.sigma      = sigma
         self.image_size = image_size
+        self.download   = download
+        self.ds         = tv.datasets.CIFAR10(root=self.root_dir, train=self.train,
+                                              transform=self.tf, download=self.download)
 
     def __len__(self):
         return self.ds.__len__()
@@ -67,4 +73,3 @@ class CIFAR10(td.Dataset):
     def __getitem__(self, idx):
         clean, _ = self.ds[idx]
         return clean
-
