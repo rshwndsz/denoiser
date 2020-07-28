@@ -8,11 +8,16 @@ import src.constants as C
 
 
 def setup():
+    """Deterministic setup"""
     # See https://pytorch.org/docs/stable/notes/randomness.html
     pl.seed_everything(C.SEED)
 
 
 def dev():
+    """Sanity run
+
+    Run a train, validation, testing epoch
+    """
     memnet  = MemNet(in_channels=3, channels=64, num_memblock=6, num_resblock=6)
     trainer = pl.Trainer(fast_dev_run=True, gpus=1)
     logger.setLevel(logging.DEBUG)
@@ -23,6 +28,7 @@ def dev():
 
 
 def train():
+    """Start training phase"""
     memnet  = MemNet(in_channels=3, channels=64, num_memblock=6, num_resblock=6)
     trainer = pl.Trainer(deterministic=C.DETERMINISTIC,      # Run slow, but same result every run
                          benchmark=C.BENCHMARK,              # Run fast
@@ -40,6 +46,7 @@ def train():
 
 
 def test():
+    """Inference"""
     trainer = pl.Trainer()
     trainer.test()
 

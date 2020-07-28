@@ -9,8 +9,8 @@ import torchvision as tv
 import pytorch_lightning as pl
 
 from src.logger import logger
-import src.constants as C
 from src.data import NoisyBSDS, CIFAR10
+import src.constants as C
 
 
 class BNReLUConv(nn.Sequential):
